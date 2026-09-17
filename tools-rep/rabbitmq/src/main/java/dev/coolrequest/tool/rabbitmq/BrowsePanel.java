@@ -66,10 +66,12 @@ public class BrowsePanel extends JPanel {
         pageSizeCombo.setSelectedItem(50);
         topRow.add(pageSizeCombo, gbc);
 
+        gbc.gridx = 4;
         peekButton = new JButton("Peek next");
         peekButton.addActionListener(e -> peek(false));
         topRow.add(peekButton, gbc);
 
+        gbc.gridx = 5;
         refreshButton = new JButton("Refresh");
         refreshButton.addActionListener(e -> peek(true));
         topRow.add(refreshButton, gbc);

@@ -182,7 +182,29 @@ public class ProducerPanel extends JPanel {
                 connection = openConnection(conn);
                 Channel channel = connection.createChannel();
                 if (exchange != null && !exchange.isEmpty()) {
-                    channel.exchangeDeclare(exchange, type, false, true, null);
+                    // 已存在的交换机：autoDelete/durable 逐值试探（同 type 下的四种组合），406 就换下一组合，
+                    // 命中即沿用服务端现状，避免 406 PRECONDITION_FAILED 把发送打断；
+                    // 全部 406（type 也不同）或不存在时按本工具口径(durable=false, autoDelete=true)创建兜底。
+                    boolean declared = false;
+                    for (boolean[] da : new boolean[][]{{false, true}, {true, true}, {false, false}, {true, false}}) {
+                        try {
+                            channel.exchangeDeclare(exchange, type, da[0], da[1], null);
+                            declared = true;
+                            break;
+                        } catch (Exception declEx) {
+                            String dm = String.valueOf(declEx.getMessage())
+                                    + (declEx.getCause() != null ? declEx.getCause().getMessage() : "");
+                            if (dm.contains("406") || dm.contains("PRECONDITION")) {
+                                channel = connection.createChannel(); // 406 会关通道，换新通道再试下一组合
+                                continue;
+                            }
+                            throw declEx;
+                        }
+                    }
+                    if (!declared) {
+                        channel = connection.createChannel();
+                        channel.exchangeDeclare(exchange, type, false, true, null);
+                    }
                 }
                 AMQP.BasicProperties props = buildProperties(contentType, headers);
                 byte[] payload = body.getBytes(StandardCharsets.UTF_8);

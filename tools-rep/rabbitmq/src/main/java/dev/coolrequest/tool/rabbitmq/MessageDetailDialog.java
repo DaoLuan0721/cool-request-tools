@@ -68,7 +68,9 @@ public class MessageDetailDialog extends DialogWrapper {
         JComboBox<String> modeCombo = new JComboBox<>(new String[]{"Text", "JSON", "Hex"});
         bodyHeader.add(modeCombo);
 
-        EditorTextField bodyEditor = new EditorTextField(BodyCodec.decode(body, BodyCodec.MODE_JSON), project, PlainTextFileType.INSTANCE) {
+        // 无参构造（纯 Swing document）：详情弹窗可能由消费回调链触发，带 project 的重载
+        // 构造时经 PsiDocumentManager 同步建 document，EDT 无读权限时硬抛 RuntimeExceptionWithAttachments
+        EditorTextField bodyEditor = new EditorTextField(BodyCodec.decode(body, BodyCodec.MODE_JSON)) {
             @Override
             protected EditorEx createEditor() {
                 EditorEx editor = super.createEditor();
@@ -85,6 +87,7 @@ public class MessageDetailDialog extends DialogWrapper {
                 return editor;
             }
         };
+        bodyEditor.setNewDocumentAndFileType(PlainTextFileType.INSTANCE, bodyEditor.getDocument());
         bodyEditor.setOneLineMode(false);
         bodyEditor.setEnabled(false);
         bodyEditor.setFont(bodyEditor.getFont().deriveFont(14f));

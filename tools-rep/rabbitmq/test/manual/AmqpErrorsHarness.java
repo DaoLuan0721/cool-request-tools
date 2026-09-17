@@ -127,6 +127,39 @@ public class AmqpErrorsHarness {
             return publishAndCheckReturn(ok, "cr.ui.ex.direct", "uik", null, "ui-direct-ok");
         });
 
+        // 13. AUTO 模式镜像：不声明直接发既有交换机（新默认行为，绝不自动创建、不会 406）
+        scenario("AUTO模式: 不声明直接发既有durable交换机", () -> {
+            Connection c = RabbitClient.factory(ok).newConnection();
+            try {
+                Channel ch = c.createChannel();
+                java.util.List<com.rabbitmq.client.Return> returned = new java.util.concurrent.CopyOnWriteArrayList<>();
+                ch.addReturnListener(returned::add);
+                ch.basicPublish("cr.ui.ex.durable", "no-match-key", true,
+                        new com.rabbitmq.client.AMQP.BasicProperties.Builder().deliveryMode(2).build(),
+                        "ui-auto-direct".getBytes("UTF-8"));
+                Thread.sleep(800);
+                ch.close();
+                // 该交换机无绑定, 无论退回与否, 都证明 406 未发生(没有声明动作)
+                return "OK: 发送链路无声明动作, 406 不可能发生 (退回数=" + returned.size() + " 属正常路由语义)";
+            } finally {
+                c.close(1000);
+            }
+        });
+
+        // 14. AUTO 模式发不存在的交换机 → 404(不自动创建的正确语义)
+        scenario("AUTO模式: 发不存在交换机(预期404不创建)", () -> {
+            Connection c = RabbitClient.factory(ok).newConnection();
+            try {
+                Channel ch = c.createChannel();
+                ch.basicPublish("cr.ui.ex.autononexist", "uik", true, null, "x".getBytes("UTF-8"));
+                Thread.sleep(800);
+                ch.close();
+                return "(未抛异常?)";
+            } finally {
+                c.close(1000);
+            }
+        });
+
         System.out.println("\n==== 全部场景执行完毕 ====");
     }
 

@@ -33,7 +33,7 @@ public class ProducerPanel extends JPanel {
 
     private final JBTextField exchangeField;
     private final JBTextField routingKeyField;
-    private final ComboBox<BuiltinExchangeType> typeCombo;
+    private final ComboBox<String> typeCombo;
     private final JBTextField contentTypeField;
     private final JBTextField headersField;
     private final EditorTextField bodyEditor;
@@ -63,7 +63,9 @@ public class ProducerPanel extends JPanel {
         gbc.gridx = 2; gbc.weightx = 0;
         topRow.add(new JBLabel("Type:"), gbc);
         gbc.gridx = 3; gbc.weightx = 0;
-        typeCombo = new ComboBox<>(new BuiltinExchangeType[]{BuiltinExchangeType.DIRECT, BuiltinExchangeType.TOPIC, BuiltinExchangeType.FANOUT, BuiltinExchangeType.HEADERS});
+        // AUTO = 不主动声明，直接按现有交换机发送；显式选类型则维持自动声明（新建时用）
+        typeCombo = new ComboBox<>(new String[]{"AUTO", "DIRECT", "TOPIC", "FANOUT", "HEADERS"});
+        typeCombo.setSelectedItem("AUTO");
         topRow.add(typeCombo, gbc);
 
         gbc.gridx = 4; gbc.weightx = 0;
@@ -98,7 +100,10 @@ public class ProducerPanel extends JPanel {
         add(north, BorderLayout.NORTH);
 
         // Body editor + send button
-        bodyEditor = new EditorTextField("", project, com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE) {
+        // 无参构造（纯 Swing document）：带 project 的重载构造时经 PsiDocumentManager 同步建 document，
+        // EDT 无读权限时硬抛 RuntimeExceptionWithAttachments（262 平台实证）；
+        // 文件类型用 setNewDocumentAndFileType 补上（EditorEx 无 setFileType）
+        bodyEditor = new EditorTextField("") {
             @Override
             protected EditorEx createEditor() {
                 EditorEx editor = super.createEditor();
@@ -106,6 +111,7 @@ public class ProducerPanel extends JPanel {
                 return editor;
             }
         };
+        bodyEditor.setNewDocumentAndFileType(com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE, bodyEditor.getDocument());
         bodyEditor.setOneLineMode(false);
         bodyEditor.setPlaceholder("Message body...");
 
@@ -118,7 +124,7 @@ public class ProducerPanel extends JPanel {
         bodyPanel.add(sendPanel, BorderLayout.SOUTH);
 
         // Result editor
-        resultEditor = new EditorTextField("", project, com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE) {
+        resultEditor = new EditorTextField("") {
             @Override
             protected EditorEx createEditor() {
                 EditorEx editor = super.createEditor();
@@ -128,6 +134,7 @@ public class ProducerPanel extends JPanel {
         };
         resultEditor.setOneLineMode(false);
         resultEditor.setEnabled(false);
+        resultEditor.setNewDocumentAndFileType(com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE, resultEditor.getDocument());
 
         JBSplitter splitter = new JBSplitter(true, 0.65f);
         splitter.setFirstComponent(bodyPanel);
@@ -156,7 +163,10 @@ public class ProducerPanel extends JPanel {
         RabbitConnection conn = connectionManager.getSelected();
         String exchange = exchangeField.getText().trim();
         String routingKey = routingKeyField.getText().trim();
-        BuiltinExchangeType type = (BuiltinExchangeType) typeCombo.getSelectedItem();
+        String typeSel = (String) typeCombo.getSelectedItem();
+        // AUTO = 不声明直接发；展示用 type 固定 DIRECT（AUTO 下 type 由服务端既有交换机决定）
+        final BuiltinExchangeType declareType = "AUTO".equals(typeSel) ? null : BuiltinExchangeType.valueOf(typeSel);
+        final BuiltinExchangeType type = declareType == null ? BuiltinExchangeType.DIRECT : declareType;
         String body = bodyEditor.getText();
         String headersJson = headersField.getText().trim();
         String contentType = contentTypeField.getText().trim();
@@ -181,14 +191,14 @@ public class ProducerPanel extends JPanel {
             try {
                 connection = openConnection(conn);
                 Channel channel = connection.createChannel();
-                if (exchange != null && !exchange.isEmpty()) {
-                    // 已存在的交换机：autoDelete/durable 逐值试探（同 type 下的四种组合），406 就换下一组合，
-                    // 命中即沿用服务端现状，避免 406 PRECONDITION_FAILED 把发送打断；
-                    // 全部 406（type 也不同）或不存在时按本工具口径(durable=false, autoDelete=true)创建兜底。
+                if ((exchange != null && !exchange.isEmpty()) && declareType != null) {
+                    // 显式选了类型 = 声明口径：已存在的交换机按 durable×autoDelete 四组合逐值试探（406 换通道试下一组合，
+                    // 命中沿用服务端现状，避免 PRECONDITION_FAILED 打断发送）；不存在才按 (false,true) 创建。
+                    // AUTO 类型（declareType==null）= 已有交换机直接发，不声明、绝不自动创建。
                     boolean declared = false;
                     for (boolean[] da : new boolean[][]{{false, true}, {true, true}, {false, false}, {true, false}}) {
                         try {
-                            channel.exchangeDeclare(exchange, type, da[0], da[1], null);
+                            channel.exchangeDeclare(exchange, declareType, da[0], da[1], null);
                             declared = true;
                             break;
                         } catch (Exception declEx) {
@@ -203,7 +213,7 @@ public class ProducerPanel extends JPanel {
                     }
                     if (!declared) {
                         channel = connection.createChannel();
-                        channel.exchangeDeclare(exchange, type, false, true, null);
+                        channel.exchangeDeclare(exchange, declareType, false, true, null);
                     }
                 }
                 AMQP.BasicProperties props = buildProperties(contentType, headers);
